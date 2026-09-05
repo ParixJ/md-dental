@@ -10,7 +10,7 @@ BodyParts3D: 3D structure database for anatomical concepts.
 Nucleic Acids Res. 2009 Jan;37(Database issue):D782-5.
 https://doi.org/10.1093/nar/gkn613
 
-Adaptations: vertex welding, coordinate quantization, coordinate transformation, half-face clipping, maxillary crop, recoloring, and illustrated third molars based on the second molar meshes. The resulting anatomy.bin and derived anatomical mesh adaptations remain licensed under CC Attribution-Share Alike 2.1 Japan. The asset preparation source is included in reference/prepare-anatomy.mjs. This share-alike notice concerns these anatomical assets and adaptations, rather than the independent application code.
+Adaptations: vertex welding, coordinate quantization, coordinate transformation, skull proportion registration to the face scan, half-face clipping, maxillary crop, recoloring, and illustrated third molars based on the second molar meshes. The resulting anatomy.bin and derived anatomical mesh adaptations remain licensed under CC Attribution-Share Alike 2.1 Japan. The asset preparation source is included in reference/prepare-anatomy.mjs. This share-alike notice concerns these anatomical assets and adaptations, rather than the independent application code.
 
 FACE SCAN
 

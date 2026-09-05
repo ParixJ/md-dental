@@ -23,7 +23,10 @@ export function transformScan(geo: THREE.BufferGeometry, target: 'jaw' | 'face')
   for (let i = 0; i < p.count; i++) {
     const x = p.getX(i), y = p.getY(i), z = p.getZ(i);
     if (target === 'jaw') p.setXYZ(i, x * 0.034, (z - 1470) * 0.035, (-y - 150) * 0.038);
-    else p.setXYZ(i, x * 0.016, (z - 1480) * 0.013, (-y - 147) * 0.0155 + 0.33);
+    // Register the separate skull dataset to the face scan. The previous depth
+    // extended almost twice as far behind the head; retain the anterior alignment
+    // while bringing the occiput and temples inside the facial envelope.
+    else p.setXYZ(i, x * 0.016 * 0.69, (z - 1480) * 0.013 * 0.93 + 0.28, ((-y - 147) * 0.0155 + 0.33) * 0.62 + 0.32);
   }
   geo.computeVertexNormals(); return geo;
 }

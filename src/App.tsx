@@ -79,9 +79,10 @@ export default function App() {
   const sceneState = useRef<ExperienceState>({ progress: 0, teeth: true, exploded: 0, jawOpen: 0.23, layers, spread: 0, instrument: null, selectedTooth: null, paused: false, reducedMotion, quality, zoom: 1, reset: 0 });
   Object.assign(sceneState.current, { teeth, exploded: exploded ? 1 : 0, jawOpen, layers, spread, instrument, selectedTooth: selectedTooth?.id ?? null, paused, reducedMotion, quality, zoom, reset });
   const progressBar = useRef<HTMLDivElement>(null);
+  const frost = useRef<HTMLDivElement>(null);
   useEffect(() => {
     let frame = 0;
-    const update = () => { const progress = Math.min(3, Math.max(0, window.scrollY / window.innerHeight)); sceneState.current.progress = progress; setChapter(Math.min(3, Math.round(progress))); if (progressBar.current) progressBar.current.style.transform = `scaleX(${progress / 3})`; frame = 0; };
+    const update = () => { const progress = Math.min(3, Math.max(0, window.scrollY / window.innerHeight)); sceneState.current.progress = progress; setChapter(Math.min(3, Math.round(progress))); if (progressBar.current) progressBar.current.style.transform = `scaleX(${progress / 3})`; if (frost.current) frost.current.style.opacity = String(progress > 1 ? Math.pow(Math.sin(progress % 1 * Math.PI), 6) * 0.86 : 0); frame = 0; };
     const scroll = () => { if (!frame) frame = requestAnimationFrame(update); };
     window.addEventListener('scroll', scroll, { passive: true }); window.addEventListener('resize', scroll); update();
     const media = window.matchMedia('(prefers-reduced-motion: reduce)'); const change = () => setReducedMotion(media.matches); media.addEventListener('change', change);
@@ -100,6 +101,7 @@ export default function App() {
       <div className="atmosphere" aria-hidden="true" />
       <Suspense fallback={null}><Scene state={sceneState} callbacks={{ ready: () => setReady(true), error: setError, selectTooth: setSelectedTooth, selectInstrument: setInstrument, hover: setHover, faceStatus: setFaceStatus, anatomyStatus: setAnatomyStatus }} /></Suspense>
       <div className="scene-vignette" aria-hidden="true" />
+      <div className="frost-transition" ref={frost} aria-hidden="true" />
       <div className="grain" aria-hidden="true" />
       <header className="header">
         <button className="brand" onClick={() => go(0)} aria-label="Dental, return to introduction"><span className="brand-word">dental<span className="brand-mark">✳</span></span><span className="brand-caption mono">ANATOMY IN MOTION</span></button>

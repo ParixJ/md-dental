@@ -3,6 +3,7 @@ import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { createJaw, createInstruments, createNerves, disposeObject, materials, type ToothInfo } from './anatomy';
 import { loadAnatomy, transformScan, clipToHalf, makeScannedTooth } from './scans';
+import { ScalarTransition, verticalChapterOffset } from './motion';
 
 export interface ExperienceState {
   progress: number; teeth: boolean; exploded: number; jawOpen: number;
@@ -15,23 +16,6 @@ export interface SceneCallbacks { ready: () => void; error: (message: string) =>
 const clamp = THREE.MathUtils.clamp;
 const smooth = (a: number, b: number, value: number) => THREE.MathUtils.smoothstep(value, a, b);
 
-function halfGeometry(source: THREE.BufferGeometry, predicate: (x: number, y: number, z: number) => boolean) {
-  const g = source.index ? source.toNonIndexed() : source.clone();
-  const pos = g.getAttribute('position'); const keep: number[] = [];
-  for (let i = 0; i < pos.count; i += 3) {
-    const x = (pos.getX(i) + pos.getX(i + 1) + pos.getX(i + 2)) / 3;
-    const y = (pos.getY(i) + pos.getY(i + 1) + pos.getY(i + 2)) / 3;
-    const z = (pos.getZ(i) + pos.getZ(i + 1) + pos.getZ(i + 2)) / 3;
-    if (predicate(x, y, z)) keep.push(i, i + 1, i + 2);
-  }
-  const result = new THREE.BufferGeometry();
-  Object.entries(g.attributes).forEach(([name, attr]) => {
-    const data = new Float32Array(keep.length * attr.itemSize);
-    keep.forEach((index, i) => { for (let k = 0; k < attr.itemSize; k++) data[i * attr.itemSize + k] = attr.array[index * attr.itemSize + k]; });
-    result.setAttribute(name, new THREE.BufferAttribute(data, attr.itemSize));
-  }); g.dispose(); return result;
-}
-
 function makeGround(scene: THREE.Scene) {
   const geo = new THREE.PlaneGeometry(85, 85, 130, 130); geo.rotateX(-Math.PI / 2);
   const p = geo.getAttribute('position');
@@ -42,6 +26,8 @@ function makeGround(scene: THREE.Scene) {
   }
   geo.computeVertexNormals();
   const floor = new THREE.Mesh(geo, new THREE.MeshStandardMaterial({ color: '#cdd4ce', roughness: 0.89, metalness: 0.08 }));
+  // This landscape is a backdrop; descending specimens must pass in front of it.
+  floor.renderOrder = -1; floor.material.depthWrite = false;
   floor.receiveShadow = true; scene.add(floor);
   const canvas = document.createElement('canvas'); canvas.width = 128; canvas.height = 128;
   const ctx = canvas.getContext('2d')!;
@@ -77,20 +63,24 @@ export function createExperience(canvas: HTMLCanvasElement, state: { current: Ex
   let disposed = false, frame = 0, lastTime = performance.now(), time = 0, rotationX = -0.12, rotationY = -0.45;
   let dragX = 0, dragY = 0, pointerDown = false, pointerStartX = 0, pointerStartY = 0, pointerDistance = 0, reset = 0, lastHover: string | null = null;
   let appliedQuality = '', renderedOnce = false, signature = '', settleUntil = 0, lastRender = 0;
+  const explosion = new ScalarTransition(state.current.exploded);
+  let wasExploding = false;
   const renderer = new THREE.WebGLRenderer({ canvas, antialias: true, alpha: true, powerPreference: 'high-performance' });
-  renderer.setClearColor('#e4e8e3', 0); renderer.toneMapping = THREE.ACESFilmicToneMapping; renderer.toneMappingExposure = 0.98; renderer.outputColorSpace = THREE.SRGBColorSpace;
+  const graphics = renderer.getContext(), debugInfo = graphics.getExtension('WEBGL_debug_renderer_info');
+  const softwareRendering = /swiftshader|llvmpipe|software|basic render/i.test(debugInfo ? graphics.getParameter(debugInfo.UNMASKED_RENDERER_WEBGL) as string : '');
+  renderer.setClearColor('#e4e8e3', 0); renderer.toneMapping = THREE.ACESFilmicToneMapping; renderer.toneMappingExposure = 0.82; renderer.outputColorSpace = THREE.SRGBColorSpace;
   const scene = new THREE.Scene(); scene.fog = new THREE.FogExp2('#e1e6e0', 0.041);
   const camera = new THREE.PerspectiveCamera(36, 1, 0.1, 100); camera.position.set(0, 1.55, 12.7); camera.lookAt(0, 0.05, 0);
   const pmrem = new THREE.PMREMGenerator(renderer); const room = new RoomEnvironment(); const env = pmrem.fromScene(room, 0.04); scene.environment = env.texture; room.dispose(); pmrem.dispose();
-  scene.environmentIntensity = 0.65;
-  scene.add(new THREE.HemisphereLight('#f9ffed', '#667985', 0.8));
-  const key = new THREE.DirectionalLight('#fffef1', 2.6); key.position.set(-4, 7, 5); scene.add(key);
+  scene.environmentIntensity = 0.5;
+  scene.add(new THREE.HemisphereLight('#f9ffed', '#667985', 0.6));
+  const key = new THREE.DirectionalLight('#fffef1', 2.0); key.position.set(-4, 7, 5); scene.add(key);
   const rim = new THREE.DirectionalLight('#efffff', 2.7); rim.position.set(5, 4, -4); scene.add(rim);
   const fill = new THREE.DirectionalLight('#b9cad8', 0.5); fill.position.set(-5, 0, -3); scene.add(fill);
   const { shadow, map: shadowMap } = makeGround(scene); const particles = makeParticles(scene);
   const jaw = createJaw(true), toolset = createInstruments(); scene.add(jaw.group, toolset.group);
   const face = new THREE.Group(); face.name = 'facial-anatomy'; const skull = new THREE.Group(), nerves = createNerves();
-  nerves.scale.y = 0.78; nerves.position.set(0, 0.31, 0.15);
+  nerves.scale.set(0.8, 0.70, 0.82); nerves.position.set(0, 0.50, 0.25);
   const skin = new THREE.Group(), dermis = new THREE.Group(); face.add(skull, nerves, skin, dermis); scene.add(face);
   let faceLoaded = false, anatomyLoaded = false;
   const abort = new AbortController();
@@ -102,8 +92,9 @@ export function createExperience(canvas: HTMLCanvasElement, state: { current: Ex
       skull.add(new THREE.Mesh(half, tooth ? materials.enamel : materials.bone));
       if (id === 52748) jaw.lower.add(new THREE.Mesh(transformScan(geometry.clone(), 'jaw'), materials.bone));
       if (id === 53649 || id === 53650) {
-        const alveolar = clipToHalf(geometry, false, 2, 1496);
-        transformScan(alveolar, 'jaw'); alveolar.translate(0, -0.85, 0); jaw.upper.add(new THREE.Mesh(alveolar, materials.bone));
+        const upperBone = transformScan(geometry.clone(), 'jaw');
+        const alveolar = clipToHalf(upperBone, false, 1, (1496 - 1470) * 0.035); upperBone.dispose();
+        alveolar.translate(0, -0.85, 0); jaw.upper.add(new THREE.Mesh(alveolar, materials.bone));
       }
       if (tooth) {
         const t = makeScannedTooth(transformScan(geometry.clone(), 'jaw'), tooth); jaw.teeth.push(t); (tooth < 30 ? jaw.upper : jaw.lower).add(t);
@@ -129,16 +120,26 @@ export function createExperience(canvas: HTMLCanvasElement, state: { current: Ex
     const box = geometry.boundingBox!, center = box.getCenter(new THREE.Vector3());
     geometry.translate(-center.x, -center.y, -center.z); geometry.scale(0.49, 0.55, 0.48); geometry.translate(0, 0.06, 0.02);
     const textures = new THREE.TextureLoader();
-    const textureError = () => { if (!disposed) { faceLoaded = false; cb.faceStatus('error'); } };
-    const normal = textures.load('/face-normal.jpg', undefined, undefined, textureError); normal.flipY = false; loadedTextures.push(normal);
-    const color = textures.load('/face-color.jpg', undefined, undefined, textureError); color.flipY = false; color.colorSpace = THREE.SRGBColorSpace; loadedTextures.push(color);
+    let texturesReady = 0, textureFailed = false;
+    const textureReady = () => {
+      texturesReady++;
+      if (texturesReady === 2 && !textureFailed && !disposed) {
+        faceLoaded = true; settleUntil = performance.now() + 900; cb.faceStatus('ready');
+      }
+    };
+    const textureError = () => { textureFailed = true; if (!disposed) { faceLoaded = false; cb.faceStatus('error'); } };
+    const normal = textures.load('/face-normal.jpg', textureReady, undefined, textureError); normal.flipY = false; loadedTextures.push(normal);
+    const color = textures.load('/face-color.jpg', textureReady, undefined, textureError); color.flipY = false; color.colorSpace = THREE.SRGBColorSpace; loadedTextures.push(color);
     const skinMat = new THREE.MeshPhysicalMaterial({ color: '#d6c9b6', map: color, normalMap: normal, normalScale: new THREE.Vector2(0.38, 0.38), roughness: 0.59, clearcoat: 0.1, side: THREE.DoubleSide });
     const skinMesh = new THREE.Mesh(clipToHalf(geometry, false), skinMat); skinMesh.name = 'normal-half-face'; skin.add(skinMesh);
     const dermisMat = materials.dermis.clone(); dermisMat.normalMap = normal; dermisMat.normalScale = new THREE.Vector2(0.75, 0.75);
     const rightHalf = clipToHalf(geometry, true);
-    const dermisMesh = new THREE.Mesh(halfGeometry(rightHalf, (x, y, z) => x > 0.86 || y < -0.57 || z < 0 || y > 1.68), dermisMat); rightHalf.dispose();
-    dermisMesh.scale.setScalar(0.985); dermis.add(dermisMesh);
-    geometry.dispose(); disposeObject(gltf.scene); faceLoaded = true; settleUntil = performance.now() + 900; cb.faceStatus('ready');
+    const scalp = clipToHalf(rightHalf, true, 1, 1.68), neck = clipToHalf(rightHalf, false, 1, -0.57);
+    const aboveNeck = clipToHalf(rightHalf, true, 1, -0.57), middle = clipToHalf(aboveNeck, false, 1, 1.68);
+    const temporal = clipToHalf(middle, true, 0, 0.86), medial = clipToHalf(middle, false, 0, 0.86), back = clipToHalf(medial, false, 2, 0);
+    for (const part of [scalp, neck, temporal, back]) { const mesh = new THREE.Mesh(part, dermisMat); mesh.scale.setScalar(0.985); dermis.add(mesh); }
+    for (const intermediate of [rightHalf, aboveNeck, middle, medial]) intermediate.dispose();
+    geometry.dispose(); disposeObject(gltf.scene);
   }, undefined, () => { if (!disposed) cb.faceStatus('error'); });
 
   const raycaster = new THREE.Raycaster(); const pointer = new THREE.Vector2(10, 10);
@@ -146,8 +147,8 @@ export function createExperience(canvas: HTMLCanvasElement, state: { current: Ex
   const intersect = () => {
     raycaster.setFromCamera(pointer, camera);
     const s = state.current;
-    if (s.progress < 1.65 && s.teeth) return raycaster.intersectObjects(jaw.teeth, true).find(hit => hit.object.userData.tooth);
-    if (s.progress > 2.55) return raycaster.intersectObjects(toolset.instruments, true)[0];
+    if (jaw.group.visible && s.teeth) { const hit = raycaster.intersectObject(jaw.group, true)[0]; return hit?.object.userData.tooth ? hit : undefined; }
+    if (toolset.group.visible) return raycaster.intersectObjects(toolset.instruments, true)[0];
   };
   const findInstrument = (object: THREE.Object3D) => { let o: THREE.Object3D | null = object; while (o && o.userData.instrument === undefined) o = o.parent; return o?.userData.instrument as number | undefined; };
   const onPointerDown = (event: PointerEvent) => {
@@ -186,45 +187,55 @@ export function createExperience(canvas: HTMLCanvasElement, state: { current: Ex
     if (document.hidden) { lastTime = now; return; }
     const nextSignature = JSON.stringify(state.current);
     if (signature !== nextSignature) { signature = nextSignature; settleUntil = now + 900; }
-    if (renderedOnce && (state.current.paused || state.current.reducedMotion) && !pointerDown && now > settleUntil) { lastTime = now; return; }
-    if (now - lastRender < (state.current.quality === 'high' || pointerDown ? 16 : 32)) return;
+    explosion.setTarget(state.current.exploded, now, state.current.reducedMotion);
+    const exploding = explosion.active(now);
+    if (exploding || wasExploding) settleUntil = Math.max(settleUntil, now + 200);
+    wasExploding = exploding;
+    if (renderedOnce && (state.current.paused || state.current.reducedMotion) && !pointerDown && !exploding && now > settleUntil) { lastTime = now; return; }
+    const interacting = pointerDown || exploding || now < settleUntil;
+    const frameBudget = softwareRendering ? (interacting ? 33 : 125) : state.current.quality === 'high' || interacting ? 16 : 32;
+    if (now - lastRender < frameBudget) return;
     lastRender = now;
     const dt = state.current.reducedMotion ? 1 : Math.min((now - lastTime) / 1000, 0.1); lastTime = now;
     const s = state.current, mobile = camera.aspect < 0.85, motion = !s.paused && !s.reducedMotion;
     if (motion) time += dt;
     const qualityKey = `${s.quality}-${mobile}`;
-    if (appliedQuality !== qualityKey) { renderer.setPixelRatio(s.quality === 'low' ? 1 : Math.min(window.devicePixelRatio, s.quality === 'high' ? 2 : mobile ? 1.3 : 1.7)); appliedQuality = qualityKey; }
+    if (appliedQuality !== qualityKey) { renderer.setPixelRatio(s.quality === 'low' || (s.quality === 'auto' && softwareRendering) ? 0.85 : Math.min(window.devicePixelRatio, s.quality === 'high' ? 2 : mobile ? 1.3 : 1.7)); appliedQuality = qualityKey; }
     if (s.reset !== reset) { reset = s.reset; dragX = 0; dragY = 0; }
     dragX = clamp(dragX, -0.9, 0.9);
     rotationX = THREE.MathUtils.damp(rotationX, -0.12 + dragX, 7, dt);
     rotationY = THREE.MathUtils.damp(rotationY, -0.45 + dragY, 7, dt);
-    const progress = clamp(s.progress, 0, 3), toFace = smooth(1.14, 1.9, progress), toTools = smooth(2.12, 2.91, progress);
+    const progress = clamp(s.progress, 0, 3), toFace = smooth(1.05, 1.95, progress);
     const x = mobile ? 0 : camera.aspect > 1.8 ? 2.1 : 1.8, bob = motion ? Math.sin(time * 0.7) * 0.065 : 0;
     const baseScale = mobile ? 0.83 : 1.16;
-    jaw.group.visible = toFace < 0.999 && anatomyLoaded; face.visible = toFace > 0.001 && toTools < 0.999 && faceLoaded && anatomyLoaded; toolset.group.visible = toTools > 0.001;
-    jaw.group.position.set(x + toFace * 9, (mobile ? -1.0 : 0.05) + bob - toFace * 1.7, -toFace * 7);
-    jaw.group.scale.setScalar(baseScale * (1 - toFace * 0.25)); jaw.group.rotation.set(rotationX - toFace * 0.6, rotationY + progress * 0.11 + toFace * 1.9, -0.09 + (motion ? Math.sin(time * 0.3) * 0.026 : 0));
-    jaw.hinge.rotation.x = THREE.MathUtils.damp(jaw.hinge.rotation.x, Math.max(s.jawOpen, s.exploded * 0.65) * 0.48, 7, dt);
-    jaw.upper.position.y = THREE.MathUtils.damp(jaw.upper.position.y, 1.03 + s.exploded * 1.05, 7, dt);
+    jaw.group.visible = progress < 1.5 && anatomyLoaded; face.visible = progress >= 1.5 && progress < 2.5 && faceLoaded && anatomyLoaded; toolset.group.visible = progress >= 2.5;
+    jaw.group.position.set(x, (mobile ? -1.0 : 0.05) + bob + verticalChapterOffset(progress, 1), 0);
+    jaw.group.scale.setScalar(baseScale); jaw.group.rotation.set(rotationX, rotationY + Math.min(progress, 1) * 0.11, -0.09 + (motion ? Math.sin(time * 0.3) * 0.026 : 0));
+    const exploded = explosion.sample(now);
+    jaw.hinge.rotation.x = THREE.MathUtils.damp(jaw.hinge.rotation.x, s.jawOpen * 0.48, 7, dt);
+    jaw.hinge.rotation.x = Math.max(jaw.hinge.rotation.x, exploded * 0.65 * 0.48);
+    jaw.upper.position.y = 1.03 + exploded * 1.05;
     jaw.teeth.forEach(t => {
       const info = t.userData.tooth as ToothInfo, home = t.userData.home as THREE.Vector3;
       t.visible = s.teeth; const selected = s.selectedTooth === info.id;
-      t.children.forEach(part => { if (part.name === 'root') part.visible = s.exploded > 0.05; });
-      const offset = s.exploded * 0.5;
-      const target = home.clone(); target.x *= 1 + s.exploded * 0.18; target.z += (home.z + 0.7) * s.exploded * 0.14;
+      t.children.forEach(part => { if (part.name === 'root') part.visible = exploded > 0.05; });
+      const offset = exploded * 0.5;
+      const target = home.clone(); target.x *= 1 + exploded * 0.18; target.z += (home.z + 0.7) * exploded * 0.14;
       target.y += (info.arch === 'Upper' ? -1 : 1) * offset;
-      if (selected) target.z += 0.25;
-      t.position.lerp(target, 1 - Math.exp(-7 * dt));
+      t.userData.selectionOffset = THREE.MathUtils.damp(t.userData.selectionOffset ?? 0, selected ? 0.25 : 0, 7, dt);
+      target.z += t.userData.selectionOffset;
+      t.position.copy(target);
       const crown = t.getObjectByName('crown') as THREE.Mesh; const mat = crown.material as THREE.MeshPhysicalMaterial;
       mat.emissive.set(selected ? '#83a888' : '#000000'); mat.emissiveIntensity = selected ? 0.22 : 0;
     });
-    face.position.set(x - (1 - toFace) * 9 + toTools * 9, (mobile ? -0.85 : 0.18) + bob, -(1 - toFace) * 5 - toTools * 6);
-    face.scale.setScalar(mobile ? 0.95 : 1.22); face.rotation.set(rotationX * 0.6, rotationY * 0.55 + (1 - toFace) - toTools * 1.5, -0.03);
+    face.position.set(x, (mobile ? -0.85 : 0.18) + bob + verticalChapterOffset(progress, 2), 0);
+    face.scale.setScalar(mobile ? 0.95 : 1.22); face.rotation.set(rotationX * 0.6, rotationY * 0.55, -0.03);
+    console.log(s.layers);
     skin.visible = s.layers.skin; dermis.visible = s.layers.dermis; skull.visible = s.layers.bone; nerves.visible = s.layers.nerves;
     skin.position.x = THREE.MathUtils.damp(skin.position.x, -s.spread * 0.5, 7, dt);
     dermis.position.x = THREE.MathUtils.damp(dermis.position.x, s.spread * 0.8, 7, dt);
     nerves.position.x = THREE.MathUtils.damp(nerves.position.x, s.spread * 0.4, 7, dt);
-    toolset.group.position.set(x - (1 - toTools) * 10, (mobile ? -1.05 : -0.03) + bob, -(1 - toTools) * 5);
+    toolset.group.position.set(x, (mobile ? -1.05 : -0.03) + bob + verticalChapterOffset(progress, 3), 0);
     toolset.group.scale.setScalar(mobile ? 0.87 : 1.33); toolset.group.rotation.set(rotationX * 0.4, rotationY * 0.7, -0.02);
     toolset.instruments.forEach((tool, i) => { const home = tool.userData.home as THREE.Vector3; const selected = s.instrument === i;
       tool.position.x = THREE.MathUtils.damp(tool.position.x, home.x + (s.instrument !== null && !selected ? Math.sign(i - s.instrument) * 0.3 : 0), 6, dt);
