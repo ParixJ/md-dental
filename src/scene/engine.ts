@@ -230,7 +230,6 @@ export function createExperience(canvas: HTMLCanvasElement, state: { current: Ex
     });
     face.position.set(x, (mobile ? -0.85 : 0.18) + bob + verticalChapterOffset(progress, 2), 0);
     face.scale.setScalar(mobile ? 0.95 : 1.22); face.rotation.set(rotationX * 0.6, rotationY * 0.55, -0.03);
-    console.log(s.layers);
     skin.visible = s.layers.skin; dermis.visible = s.layers.dermis; skull.visible = s.layers.bone; nerves.visible = s.layers.nerves;
     skin.position.x = THREE.MathUtils.damp(skin.position.x, -s.spread * 0.5, 7, dt);
     dermis.position.x = THREE.MathUtils.damp(dermis.position.x, s.spread * 0.8, 7, dt);
