@@ -1,0 +1,35 @@
+BODYParts3D ANATOMICAL MESHES
+
+BodyParts3D, (c) The Database Center for Life Science licensed under CC Attribution-Share Alike 2.1 Japan.
+https://creativecommons.org/licenses/by-sa/2.1/jp/
+Source collection: https://lifesciencedb.jp/bp3d/
+STL conversion: https://github.com/Kevin-Mattheus-Moerman/BodyParts3D
+Data DOI: https://doi.org/10.18908/lsdba.nbdc00837-000
+Mitsuhashi N, Fujieda K, Tamura T, Kawamoto S, Takagi T, Okubo K.
+BodyParts3D: 3D structure database for anatomical concepts.
+Nucleic Acids Res. 2009 Jan;37(Database issue):D782-5.
+https://doi.org/10.1093/nar/gkn613
+
+Adaptations: vertex welding, coordinate quantization, coordinate transformation, half-face clipping, maxillary crop, recoloring, and illustrated third molars based on the second molar meshes. The resulting anatomy.bin and derived anatomical mesh adaptations remain licensed under CC Attribution-Share Alike 2.1 Japan. The asset preparation source is included in reference/prepare-anatomy.mjs. This share-alike notice concerns these anatomical assets and adaptations, rather than the independent application code.
+
+FACE SCAN
+
+Lee Perry-Smith / Infinite-Realities, (c) I-R Entertainment Ltd.
+LPS Head, Creative Commons Attribution 3.0.
+https://creativecommons.org/licenses/by/3.0/
+Original attribution: https://casual-effects.com/g3d/data10/research/model/lpshead/info.js
+Archive: Morgan McGuire, Computer Graphics Archive, July 2017, https://casual-effects.com/data/
+WebGL asset distribution: https://github.com/mrdoob/three.js/tree/dev/examples/models/gltf/LeePerrySmith
+Adaptations: geometry scaling, half-face clipping, changed materials, and combined illustrative bone, dermis, and nerve layers.
+
+FONTS
+
+DM Sans and IBM Plex Mono: SIL Open Font License 1.1.
+Full license texts are included in /fonts/.
+
+EXPERIENCE REFERENCE
+
+Igloo Inc., https://www.igloo.inc/, by Bureaux and Abeto.
+Its composition, continuous 3D storytelling, subtle technical annotations, and icy material world informed this dental adaptation. No Igloo source code or production artwork is included.
+
+Original dental instruments, nerve paths, interaction code, and interface were created for this project. The anatomy composition is illustrative and is not a validated clinical model.
