@@ -22,9 +22,19 @@ export class ScalarTransition {
   active(now: number) { return this.from !== this.target && now < this.started + this.duration; }
 }
 
-/** Incoming specimens descend from above; outgoing specimens continue below. */
-export function verticalChapterOffset(progress: number, chapter: 1 | 2 | 3, travel = 12) {
-  const incoming = chapter === 1 ? 0 : 1 - ease((progress - (chapter - 0.5)) / 0.45);
+/** Specimens rise from below and remain partly visible throughout the handoff. */
+export function verticalChapterOffset(progress: number, chapter: 1 | 2 | 3, travel = 4.2) {
+  const arrival = clamp01((progress - (chapter - 0.5)) / 0.45);
+  const incoming = chapter === 1 ? 0 : Math.pow(1 - arrival, 3);
   const outgoing = chapter === 3 ? 0 : ease((progress - (chapter + 0.05)) / 0.45);
-  return (incoming - outgoing) * travel;
+  return (outgoing - incoming) * travel;
+}
+
+export function dampProgress(current: number, target: number, seconds: number, rate = 18) {
+  const value = current + (target - current) * (1 - Math.exp(-rate * Math.max(0, seconds)));
+  return Math.abs(value - target) < 0.0001 ? target : value;
+}
+
+export function toothSelectionOffset(id: number, homeX: number, amount: number) {
+  return id % 10 > 3 ? { x: Math.sign(homeX) * amount * 2.6, z: 0 } : { x: 0, z: amount };
 }

@@ -3,7 +3,8 @@ import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { createJaw, createInstruments, createNerves, disposeObject, materials, type ToothInfo } from './anatomy';
 import { loadAnatomy, transformScan, clipToHalf, makeScannedTooth } from './scans';
-import { ScalarTransition, verticalChapterOffset } from './motion';
+import { ScalarTransition, verticalChapterOffset, toothSelectionOffset } from './motion';
+import { createFlowEffects } from './effects';
 
 export interface ExperienceState {
   progress: number; teeth: boolean; exploded: number; jawOpen: number;
@@ -38,7 +39,7 @@ function makeGround(scene: THREE.Scene) {
   shadow.rotation.x = -Math.PI / 2; shadow.position.set(1.65, -2.365, 0); scene.add(shadow); return { shadow, map };
 }
 
-function makeParticles(scene: THREE.Scene) {
+function makeParticles(scene: THREE.Scene, flow: THREE.Texture) {
   const count = 900, positions = new Float32Array(count * 3), forms = new Float32Array(count * 3), randoms = new Float32Array(count);
   // Seeded placement keeps the composition stable across reloads.
   let seed = 42; const random = () => { seed = (seed * 16807) % 2147483647; return (seed - 1) / 2147483646; };
@@ -48,12 +49,14 @@ function makeParticles(scene: THREE.Scene) {
     forms[i * 3] = Math.cos(a) * radius + (y < 0 ? Math.sign(Math.cos(a)) * 0.38 : 0); forms[i * 3 + 1] = y; forms[i * 3 + 2] = Math.sin(a) * radius * 0.7;
   }
   const geo = new THREE.BufferGeometry(); geo.setAttribute('position', new THREE.BufferAttribute(positions, 3)); geo.setAttribute('aForm', new THREE.BufferAttribute(forms, 3)); geo.setAttribute('aRandom', new THREE.BufferAttribute(randoms, 1));
-  const mat = new THREE.ShaderMaterial({ transparent: true, depthWrite: false, uniforms: { uTime: { value: 0 }, uPointer: { value: new THREE.Vector2() }, uSize: { value: Math.min(window.devicePixelRatio, 1.8) }, uMorph: { value: 0 }, uOrigin: { value: new THREE.Vector3() } },
-    vertexShader: `attribute float aRandom; attribute vec3 aForm; uniform float uMorph; uniform vec3 uOrigin; uniform float uTime; uniform vec2 uPointer; uniform float uSize; varying float vAlpha;
+  const mat = new THREE.ShaderMaterial({ transparent: true, depthWrite: false, uniforms: { uFlow: { value: flow }, uTime: { value: 0 }, uPointer: { value: new THREE.Vector2() }, uSize: { value: Math.min(window.devicePixelRatio, 1.8) }, uMorph: { value: 0 }, uOrigin: { value: new THREE.Vector3() } },
+    vertexShader: `attribute float aRandom; attribute vec3 aForm; uniform sampler2D uFlow; uniform float uMorph; uniform vec3 uOrigin; uniform float uTime; uniform vec2 uPointer; uniform float uSize; varying float vAlpha;
       void main(){vec3 p=position; p.x+=sin(uTime*0.13+aRandom*20.)*0.3; p.y+=cos(uTime*0.16+aRandom*15.)*0.28;
       p=mix(p,aForm*1.6+uOrigin,uMorph);
       vec2 delta=p.xy-uPointer*vec2(8.,5.); float distance=length(delta); p.xy+=normalize(delta+0.001)*exp(-distance*1.3)*0.7;
-      vec4 mv=modelViewMatrix*vec4(p,1.);gl_Position=projectionMatrix*mv;gl_PointSize=(1.3+aRandom*2.)*uSize;vAlpha=0.2+aRandom*0.45;}`,
+      vec4 projected=projectionMatrix*modelViewMatrix*vec4(p,1.); vec3 flow=texture2D(uFlow,clamp(projected.xy/projected.w*.5+.5,0.,1.)).rgb;
+      p.xy+=(flow.rg-vec2(128./255.))*flow.b*2.6;
+      vec4 mv=modelViewMatrix*vec4(p,1.);gl_Position=projectionMatrix*mv;gl_PointSize=(1.3+aRandom*2.+flow.b*2.)*uSize;vAlpha=0.2+aRandom*0.45+flow.b*.3;}`,
     fragmentShader: `varying float vAlpha;void main(){float d=length(gl_PointCoord-0.5);if(d>0.5)discard;gl_FragColor=vec4(vec3(0.98,1.,0.96),vAlpha*(1.-smoothstep(0.18,0.5,d)));}`,
   });
   const points = new THREE.Points(geo, mat); scene.add(points); return { points, mat };
@@ -77,7 +80,7 @@ export function createExperience(canvas: HTMLCanvasElement, state: { current: Ex
   const key = new THREE.DirectionalLight('#fffef1', 2.0); key.position.set(-4, 7, 5); scene.add(key);
   const rim = new THREE.DirectionalLight('#efffff', 2.7); rim.position.set(5, 4, -4); scene.add(rim);
   const fill = new THREE.DirectionalLight('#b9cad8', 0.5); fill.position.set(-5, 0, -3); scene.add(fill);
-  const { shadow, map: shadowMap } = makeGround(scene); const particles = makeParticles(scene);
+  const { shadow, map: shadowMap } = makeGround(scene); const effects = createFlowEffects(renderer, scene); const particles = makeParticles(scene, effects.flow);
   const jaw = createJaw(true), toolset = createInstruments(); scene.add(jaw.group, toolset.group);
   const face = new THREE.Group(); face.name = 'facial-anatomy'; const skull = new THREE.Group(), nerves = createNerves();
   nerves.scale.set(0.8, 0.70, 0.82); nerves.position.set(0, 0.50, 0.25);
@@ -157,6 +160,7 @@ export function createExperience(canvas: HTMLCanvasElement, state: { current: Ex
   const onPointerMove = (event: PointerEvent) => {
     settleUntil = performance.now() + 500;
     positionPointer(event);
+    if (!state.current.reducedMotion && !state.current.paused) effects.pointer(pointer);
     if (pointerDown) { const dx = event.clientX - pointerStartX, dy = event.clientY - pointerStartY; pointerDistance += Math.abs(dx) + Math.abs(dy); dragY += dx * 0.006; if (event.pointerType !== 'touch') dragX += dy * 0.004; pointerStartX = event.clientX; pointerStartY = event.clientY; return; }
     const hit = intersect(); let text: string | null = null;
     if (hit) { const tooth = hit.object.userData.tooth as ToothInfo | undefined; text = tooth ? `${tooth.id} / ${tooth.name}` : toolset.instruments[findInstrument(hit.object) ?? 0].name; }
@@ -180,6 +184,8 @@ export function createExperience(canvas: HTMLCanvasElement, state: { current: Ex
   canvas.addEventListener('pointerdown', onPointerDown); canvas.addEventListener('pointermove', onPointerMove); canvas.addEventListener('pointerup', onPointerUp); canvas.addEventListener('pointercancel', cancel); canvas.addEventListener('pointerleave', leave); canvas.addEventListener('keydown', onKey); canvas.addEventListener('webglcontextlost', onContextLost);
   const resize = () => { const w = canvas.clientWidth, h = canvas.clientHeight; camera.aspect = w / h; camera.updateProjectionMatrix(); renderer.setSize(w, h, false); appliedQuality = ''; settleUntil = performance.now() + 900; };
   const observer = new ResizeObserver(resize); observer.observe(canvas); resize();
+  const modelBounds = new THREE.Box3(), modelSize = new THREE.Vector3(), modelCenter = new THREE.Vector3();
+  const cameraFocus = new THREE.Vector3(0, 0.05, 0);
 
   function tick(now: number) {
     if (disposed) return;
@@ -197,7 +203,7 @@ export function createExperience(canvas: HTMLCanvasElement, state: { current: Ex
     if (now - lastRender < frameBudget) return;
     lastRender = now;
     const dt = state.current.reducedMotion ? 1 : Math.min((now - lastTime) / 1000, 0.1); lastTime = now;
-    const s = state.current, mobile = camera.aspect < 0.85, motion = !s.paused && !s.reducedMotion;
+    const s = state.current, mobile = window.innerWidth <= 1100 || window.innerHeight <= 600, motion = !s.paused && !s.reducedMotion;
     if (motion) time += dt;
     const qualityKey = `${s.quality}-${mobile}`;
     if (appliedQuality !== qualityKey) { renderer.setPixelRatio(s.quality === 'low' || (s.quality === 'auto' && softwareRendering) ? 0.85 : Math.min(window.devicePixelRatio, s.quality === 'high' ? 2 : mobile ? 1.3 : 1.7)); appliedQuality = qualityKey; }
@@ -206,10 +212,11 @@ export function createExperience(canvas: HTMLCanvasElement, state: { current: Ex
     rotationX = THREE.MathUtils.damp(rotationX, -0.12 + dragX, 7, dt);
     rotationY = THREE.MathUtils.damp(rotationY, -0.45 + dragY, 7, dt);
     const progress = clamp(s.progress, 0, 3), toFace = smooth(1.05, 1.95, progress);
+    const chapterTravel = mobile ? 2.2 : 4.2;
     const x = mobile ? 0 : camera.aspect > 1.8 ? 2.1 : 1.8, bob = motion ? Math.sin(time * 0.7) * 0.065 : 0;
-    const baseScale = mobile ? 0.83 : 1.16;
+    const baseScale = mobile ? 1 : 1.16;
     jaw.group.visible = progress < 1.5 && anatomyLoaded; face.visible = progress >= 1.5 && progress < 2.5 && faceLoaded && anatomyLoaded; toolset.group.visible = progress >= 2.5;
-    jaw.group.position.set(x, (mobile ? -1.0 : 0.05) + bob + verticalChapterOffset(progress, 1), 0);
+    jaw.group.position.set(x, 0.05 + bob + verticalChapterOffset(progress, 1, chapterTravel), 0);
     jaw.group.scale.setScalar(baseScale); jaw.group.rotation.set(rotationX, rotationY + Math.min(progress, 1) * 0.11, -0.09 + (motion ? Math.sin(time * 0.3) * 0.026 : 0));
     const exploded = explosion.sample(now);
     jaw.hinge.rotation.x = THREE.MathUtils.damp(jaw.hinge.rotation.x, s.jawOpen * 0.48, 7, dt);
@@ -223,37 +230,54 @@ export function createExperience(canvas: HTMLCanvasElement, state: { current: Ex
       const target = home.clone(); target.x *= 1 + exploded * 0.18; target.z += (home.z + 0.7) * exploded * 0.14;
       target.y += (info.arch === 'Upper' ? -1 : 1) * offset;
       t.userData.selectionOffset = THREE.MathUtils.damp(t.userData.selectionOffset ?? 0, selected ? 0.25 : 0, 7, dt);
-      target.z += t.userData.selectionOffset;
+      const selection = toothSelectionOffset(info.id, home.x, t.userData.selectionOffset);
+      target.x += selection.x; target.z += selection.z;
       t.position.copy(target);
       const crown = t.getObjectByName('crown') as THREE.Mesh; const mat = crown.material as THREE.MeshPhysicalMaterial;
       mat.emissive.set(selected ? '#83a888' : '#000000'); mat.emissiveIntensity = selected ? 0.22 : 0;
     });
-    face.position.set(x, (mobile ? -0.85 : 0.18) + bob + verticalChapterOffset(progress, 2), 0);
-    face.scale.setScalar(mobile ? 0.95 : 1.22); face.rotation.set(rotationX * 0.6, rotationY * 0.55, -0.03);
+    face.position.set(x, 0.18 + bob + verticalChapterOffset(progress, 2, chapterTravel), 0);
+    face.scale.setScalar(mobile ? 1 : 1.22); face.rotation.set(rotationX * 0.6, rotationY * 0.55, -0.03);
     skin.visible = s.layers.skin; dermis.visible = s.layers.dermis; skull.visible = s.layers.bone; nerves.visible = s.layers.nerves;
     skin.position.x = THREE.MathUtils.damp(skin.position.x, -s.spread * 0.5, 7, dt);
     dermis.position.x = THREE.MathUtils.damp(dermis.position.x, s.spread * 0.8, 7, dt);
     nerves.position.x = THREE.MathUtils.damp(nerves.position.x, s.spread * 0.4, 7, dt);
-    toolset.group.position.set(x, (mobile ? -1.05 : -0.03) + bob + verticalChapterOffset(progress, 3), 0);
+    toolset.group.position.set(x, -0.03 + bob + verticalChapterOffset(progress, 3, chapterTravel), 0);
     toolset.group.scale.setScalar(mobile ? 0.87 : 1.33); toolset.group.rotation.set(rotationX * 0.4, rotationY * 0.7, -0.02);
     toolset.instruments.forEach((tool, i) => { const home = tool.userData.home as THREE.Vector3; const selected = s.instrument === i;
       tool.position.x = THREE.MathUtils.damp(tool.position.x, home.x + (s.instrument !== null && !selected ? Math.sign(i - s.instrument) * 0.3 : 0), 6, dt);
       tool.position.z = THREE.MathUtils.damp(tool.position.z, home.z + (selected ? 1.15 : 0), 6, dt);
       tool.rotation.y = THREE.MathUtils.damp(tool.rotation.y, selected && motion ? Math.sin(time * 0.65) * 0.3 : 0, 6, dt);
     });
-    camera.position.z = THREE.MathUtils.damp(camera.position.z, (mobile ? 14.8 : 12.7) / s.zoom, 5, dt); camera.updateMatrixWorld();
+    let cameraDistance = 12.7;
+    const focus = new THREE.Vector3(0, 0.05, 0);
+    if (mobile && (anatomyLoaded || progress >= 2.5)) {
+      const active = progress < 1.5 ? jaw.group : progress < 2.5 ? face : toolset.group;
+      active.updateMatrixWorld(true); modelBounds.setFromObject(active); modelBounds.getSize(modelSize); modelBounds.getCenter(modelCenter);
+      if (!modelBounds.isEmpty()) {
+        const tangent = Math.tan(THREE.MathUtils.degToRad(camera.fov / 2));
+        cameraDistance = Math.max(modelSize.y / (2 * tangent), modelSize.x / (2 * tangent * camera.aspect)) * 1.05 + modelSize.z * 0.2;
+        focus.set(0, modelCenter.y - verticalChapterOffset(progress, progress < 1.5 ? 1 : progress < 2.5 ? 2 : 3, chapterTravel), 0);
+      }
+    }
+    cameraFocus.lerp(focus, 1 - Math.exp(-8 * dt));
+    camera.position.x = 0; camera.position.y = THREE.MathUtils.damp(camera.position.y, mobile ? cameraFocus.y + 0.65 : 1.55, 8, dt);
+    camera.position.z = THREE.MathUtils.damp(camera.position.z, cameraDistance / (mobile ? Math.min(s.zoom, 1.15) : s.zoom), 8, dt);
+    camera.lookAt(cameraFocus); camera.updateMatrixWorld();
     particles.mat.uniforms.uTime.value = time; particles.mat.uniforms.uPointer.value.lerp(pointer, 0.025);
     particles.mat.uniforms.uMorph.value = motion && progress > 1 ? Math.pow(Math.sin((progress % 1) * Math.PI), 4) * 0.94 : 0;
     particles.mat.uniforms.uOrigin.value.set(x, mobile ? -0.7 : 0, -0.5);
     shadow.position.x = x; shadow.material.opacity = 0.9 - toFace * 0.25;
     // Static and reduced-motion views render only until direct interactions settle.
-    renderer.render(scene, camera);
+    const transition = progress > 1 ? Math.pow(Math.sin((progress % 1) * Math.PI), 4) : 0;
+    effects.update(dt, time, transition, new THREE.Vector3(x, mobile ? cameraFocus.y : 0.3, 0), camera, motion, anatomyLoaded || progress >= 2.5);
+    effects.render(camera);
     if (!renderedOnce) { renderedOnce = true; cb.ready(); }
   }
   frame = requestAnimationFrame(tick);
   return () => {
     disposed = true; abort.abort(); cancelAnimationFrame(frame); observer.disconnect();
     canvas.removeEventListener('pointerdown', onPointerDown); canvas.removeEventListener('pointermove', onPointerMove); canvas.removeEventListener('pointerup', onPointerUp); canvas.removeEventListener('pointercancel', cancel); canvas.removeEventListener('pointerleave', leave); canvas.removeEventListener('keydown', onKey); canvas.removeEventListener('webglcontextlost', onContextLost);
-    disposeObject(scene); loadedTextures.forEach(t => t.dispose()); shadowMap.dispose(); env.dispose(); renderer.dispose();
+    effects.dispose(); disposeObject(scene); loadedTextures.forEach(t => t.dispose()); shadowMap.dispose(); env.dispose(); renderer.dispose();
   };
 }

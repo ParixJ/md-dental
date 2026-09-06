@@ -171,9 +171,108 @@ test('fitted cutaway and vertical chapter movement render from multiple angles',
   await page.screenshot({ path: testInfo.outputPath('face-profile-without-bone.png') });
   await page.getByRole('group', { name: 'Facial layers' }).getByRole('button', { name: /Bone/ }).click();
   await page.getByRole('button', { name: 'Reset model view' }).click();
-  for (const [name, progress] of [['jaw-descending', 1.2], ['face-entering-above', 1.8], ['face-descending', 2.2], ['instruments-entering-above', 2.8]] as const) {
+  // Holding a pointer keeps automatic settling suspended for these in-between views.
+  await page.mouse.move(20, 200); await page.mouse.down();
+  for (const [name, progress] of [['jaw-exiting-above', 1.2], ['face-entering-below', 1.8], ['face-exiting-above', 2.2], ['instruments-entering-below', 2.8]] as const) {
     await page.evaluate(p => window.scrollTo({ top: window.innerHeight * p, behavior: 'instant' }), progress);
     await expect(page.locator('.experience')).toHaveClass(new RegExp(`chapter-${Math.round(progress)}`));
     await page.screenshot({ path: testInfo.outputPath(`${name}.png`) });
   }
+  await page.mouse.up();
+});
+
+test('partial scrolling settles smoothly in either direction and accepts interruption', async ({ page }) => {
+  await page.emulateMedia({ reducedMotion: 'no-preference' });
+  await page.goto('/');
+  await expect(page.locator('.loading-state')).toHaveCount(0, { timeout: 60000 });
+  await page.getByRole('button', { name: 'MOTION ON' }).click();
+  for (const [position, destination] of [[1.27, 1], [1.78, 2], [2.26, 2], [2.74, 3]]) {
+    await page.mouse.wheel(0, -1); // A new gesture interrupts an existing snap.
+    await page.evaluate(p => window.scrollTo({ top: window.innerHeight * p, behavior: 'instant' }), position);
+    await expect.poll(() => page.evaluate(() => window.scrollY / window.innerHeight), { timeout: 12000 }).toBeCloseTo(destination, 2);
+    await expect(page.locator('.experience')).toHaveClass(new RegExp(`chapter-${destination}`));
+  }
+  await page.getByRole('button', { name: 'Chapter 1: The introduction' }).click();
+  await page.mouse.wheel(0, 600);
+  await page.evaluate(() => window.scrollTo({ top: window.innerHeight * 2.8, behavior: 'instant' }));
+  await expect.poll(() => page.evaluate(() => window.scrollY / window.innerHeight), { timeout: 12000 }).toBeCloseTo(3, 2);
+});
+
+test('compact controls and inspection reserve model space on phones and tablets', async ({ page }, testInfo) => {
+  await page.goto('/');
+  await expect(page.locator('.loading-state')).toHaveCount(0, { timeout: 60000 });
+  const separateFromCanvas = async (selector: string) => {
+    const model = (await page.locator('canvas').boundingBox())!;
+    const panel = (await page.locator(selector).boundingBox())!;
+    const overlapX = Math.min(model.x + model.width, panel.x + panel.width) - Math.max(model.x, panel.x);
+    const overlapY = Math.min(model.y + model.height, panel.y + panel.height) - Math.max(model.y, panel.y);
+    expect(overlapX <= 1 || overlapY <= 1).toBe(true);
+    expect(model.width).toBeGreaterThan(250); expect(model.height).toBeGreaterThan(150);
+  };
+  for (const viewport of [{ width: 390, height: 844 }, { width: 768, height: 1024 }, { width: 360, height: 640 }, { width: 844, height: 390 }]) {
+    await page.getByRole('button', { name: 'Chapter 3: Beneath the surface' }).click();
+    await expect(page.locator('.experience')).toHaveClass(/chapter-2/);
+    await page.setViewportSize(viewport);
+    await expect(page.locator('.experience')).toHaveClass(/chapter-2/);
+    await expect.poll(() => page.evaluate(() => window.scrollY / window.innerHeight)).toBeCloseTo(2, 2);
+    await page.getByRole('button', { name: 'Chapter 2: The architecture' }).click();
+    await expect(page.locator('.experience')).toHaveClass(/chapter-1/);
+    await page.getByRole('button', { name: 'Adjust model', exact: true }).click();
+    await expect(page.locator('.chapter-adjustments')).toBeVisible();
+    await separateFromCanvas('.chapter-adjustments');
+    await page.locator('#tooth-select').selectOption(viewport.width === 768 ? '36' : '16');
+    await expect(page.getByRole('heading', { level: 2, name: 'First molar' })).toBeVisible();
+    await expect(page.locator('.chapter-adjustments')).not.toBeVisible();
+    await separateFromCanvas('.inspection-card');
+    await page.screenshot({ path: testInfo.outputPath(`rear-tooth-${viewport.width}x${viewport.height}.png`) });
+    await page.getByRole('button', { name: 'Close tooth details' }).click();
+    await page.getByRole('button', { name: 'Chapter 3: Beneath the surface' }).click();
+    await expect(page.getByText('Loading the facial study…')).not.toBeVisible({ timeout: 60000 });
+    await page.getByRole('button', { name: 'Adjust model', exact: true }).click();
+    await separateFromCanvas('.chapter-adjustments');
+    await page.getByRole('button', { name: 'Nerves' }).click();
+    await page.getByRole('button', { name: 'Close model controls' }).click();
+    await page.screenshot({ path: testInfo.outputPath(`face-${viewport.width}x${viewport.height}.png`) });
+    await page.getByRole('button', { name: 'Chapter 4: The instruments' }).click();
+    await page.getByRole('button', { name: 'Adjust model', exact: true }).click();
+    await page.getByRole('button', { name: '01 Mouth mirror' }).click();
+    await expect(page.getByRole('heading', { name: 'A different point of view.' })).toBeVisible();
+    await separateFromCanvas('.inspection-card');
+    await page.getByRole('button', { name: 'Close instrument details' }).click();
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+  }
+});
+
+test('controls use solid surfaces without the glass UI overlay', async ({ page }) => {
+  await page.goto('/');
+  await expect(page.locator('.loading-state')).toHaveCount(0, { timeout: 60000 });
+  await expect(page.locator('.frost-transition')).toHaveCount(0);
+  expect(await page.locator('.view-switch').evaluate(element => getComputedStyle(element).backdropFilter)).toBe('none');
+  await page.getByRole('button', { name: 'Chapter 2: The architecture' }).click();
+  await page.locator('#tooth-select').selectOption('26');
+  await expect(page.locator('.inspection-card')).toBeVisible();
+  expect(await page.locator('.inspection-card').evaluate(element => getComputedStyle(element).backdropFilter)).toBe('none');
+  await page.setViewportSize({ width: 390, height: 844 });
+  const adjust = page.getByRole('button', { name: 'Adjust model', exact: true });
+  await adjust.click();
+  await expect(adjust).toHaveCSS('color', 'rgb(239, 244, 233)');
+  await page.getByRole('button', { name: 'Close model controls' }).click();
+  await expect(adjust).toHaveCSS('color', 'rgb(53, 75, 60)');
+});
+
+test('compact chapter handoffs render specimens at both sides of the boundary', async ({ page }, testInfo) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.goto('/');
+  await expect(page.locator('.loading-state')).toHaveCount(0, { timeout: 60000 });
+  await page.getByRole('button', { name: 'Chapter 3: Beneath the surface' }).click();
+  await expect(page.getByText('Loading the facial study…')).not.toBeVisible({ timeout: 60000 });
+  await page.mouse.move(10, 76); await page.mouse.down();
+  for (const progress of [1.48, 1.52, 2.48, 2.52]) {
+    await page.evaluate(p => window.scrollTo({ top: window.innerHeight * p, behavior: 'instant' }), progress);
+    await expect(page.locator('.experience')).toHaveClass(new RegExp(`chapter-${Math.round(progress)}`));
+    await expect.poll(() => page.evaluate(() => window.scrollY / window.innerHeight)).toBeCloseTo(progress, 2);
+    await page.screenshot({ path: testInfo.outputPath(`mobile-handoff-${progress}.png`) });
+  }
+  await page.mouse.up();
+  await expect.poll(() => page.evaluate(() => window.scrollY / window.innerHeight)).toBeCloseTo(3, 2);
 });

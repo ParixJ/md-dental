@@ -1,6 +1,7 @@
 import { lazy, Suspense, useEffect, useRef, useState, type ReactNode } from 'react';
 import { dentition, type ToothInfo } from './scene/anatomy';
 import type { ExperienceState } from './scene/engine';
+import { useChapterScroll } from './useChapterScroll';
 
 const Scene = lazy(() => import('./Scene'));
 const chapters = [
@@ -52,7 +53,7 @@ function useAmbientSound() {
         const context = new AudioContext(); const gain = context.createGain(); gain.gain.value = 0; gain.connect(context.destination);
         for (const frequency of [110, 164.81, 220.3]) {
           const osc = context.createOscillator(); osc.type = 'sine'; osc.frequency.value = frequency;
-          const voice = context.createGain(); voice.gain.value = 0.07; osc.connect(voice); voice.connect(gain); osc.start();
+          const voice = context.createGain(); voice.gain.value = 0.0007; osc.connect(voice); voice.connect(gain); osc.start();
           const lfo = context.createOscillator(); lfo.frequency.value = 0.11 + frequency / 4000; const depth = context.createGain(); depth.gain.value = 0.025; lfo.connect(depth); depth.connect(voice.gain); lfo.start();
         }
         audio.current = { context, gain };
@@ -71,25 +72,24 @@ export default function App() {
   const [teeth, setTeeth] = useState(true), [exploded, setExploded] = useState(false), [jawOpen, setJawOpen] = useState(0.23);
   const [selectedTooth, setSelectedTooth] = useState<ToothInfo | null>(null), [instrument, setInstrument] = useState<number | null>(null);
   const [layers, setLayers] = useState({ skin: true, dermis: true, bone: true, nerves: true }), [spread, setSpread] = useState(0);
-  const [paused, setPaused] = useState(false), [reducedMotion, setReducedMotion] = useState(() => window.matchMedia('(prefers-reduced-motion: reduce)').matches);
+  const [paused, setPaused] = useState(false), [reducedMotion, setReducedMotion] = useState(true);
   const [quality, setQuality] = useState<'auto' | 'high' | 'low'>('auto'), [zoom, setZoom] = useState(1), [reset, setReset] = useState(0);
   const [dialog, setDialog] = useState<'index' | 'about' | 'settings' | null>(null), [hover, setHover] = useState<string | null>(null), [faceStatus, setFaceStatus] = useState<'loading' | 'ready' | 'error'>('loading');
   const [anatomyStatus, setAnatomyStatus] = useState<'loading' | 'ready' | 'error'>('loading');
+  const [controlsOpen, setControlsOpen] = useState(false);
   const sound = useAmbientSound();
   const sceneState = useRef<ExperienceState>({ progress: 0, teeth: true, exploded: 0, jawOpen: 0.23, layers, spread: 0, instrument: null, selectedTooth: null, paused: false, reducedMotion, quality, zoom: 1, reset: 0 });
   Object.assign(sceneState.current, { teeth, exploded: exploded ? 1 : 0, jawOpen, layers, spread, instrument, selectedTooth: selectedTooth?.id ?? null, paused, reducedMotion, quality, zoom, reset });
   const progressBar = useRef<HTMLDivElement>(null);
-  const frost = useRef<HTMLDivElement>(null);
+  const navigate = useChapterScroll(sceneState, setChapter, progressBar, dialog !== null);
   useEffect(() => {
-    let frame = 0;
-    const update = () => { const progress = Math.min(3, Math.max(0, window.scrollY / window.innerHeight)); sceneState.current.progress = progress; setChapter(Math.min(3, Math.round(progress))); if (progressBar.current) progressBar.current.style.transform = `scaleX(${progress / 3})`; if (frost.current) frost.current.style.opacity = String(progress > 1 ? Math.pow(Math.sin(progress % 1 * Math.PI), 6) * 0.86 : 0); frame = 0; };
-    const scroll = () => { if (!frame) frame = requestAnimationFrame(update); };
-    window.addEventListener('scroll', scroll, { passive: true }); window.addEventListener('resize', scroll); update();
     const media = window.matchMedia('(prefers-reduced-motion: reduce)'); const change = () => setReducedMotion(media.matches); media.addEventListener('change', change);
-    return () => { window.removeEventListener('scroll', scroll); window.removeEventListener('resize', scroll); cancelAnimationFrame(frame); media.removeEventListener('change', change); };
+    return () => media.removeEventListener('change', change);
   }, []);
   useEffect(() => { if (!teeth) setSelectedTooth(null); }, [teeth]);
-  const go = (index: number) => { setDialog(null); setSelectedTooth(null); setZoom(1); setReset(v => v + 1); window.scrollTo({ top: index * window.innerHeight, behavior: reducedMotion ? 'instant' : 'smooth' }); };
+  useEffect(() => { setControlsOpen(false); }, [chapter]);
+  useEffect(() => { if (selectedTooth || instrument !== null) setControlsOpen(false); }, [selectedTooth, instrument]);
+  const go = (index: number) => { setDialog(null); setSelectedTooth(null); setZoom(1); setReset(v => v + 1); navigate.current(index); };
   const resetView = () => { setReset(v => v + 1); setZoom(1); setJawOpen(0.23); setSelectedTooth(null); setInstrument(null); setSpread(0); };
   const view = !teeth ? 'bone' : exploded ? 'exploded' : 'dentition';
   const setView = (value: string) => { setTeeth(value !== 'bone'); setExploded(value === 'exploded'); setSelectedTooth(null); };
@@ -97,11 +97,10 @@ export default function App() {
 
   return <>
     <a className="skip-link" href="#experience-controls">Skip to exploration controls</a>
-    <div className={`experience ${ready ? 'is-ready' : ''} chapter-${chapter} ${reducedMotion ? 'reduced-motion' : ''}`}>
+    <div className={`experience ${ready ? 'is-ready' : ''} chapter-${chapter} ${reducedMotion ? 'reduced-motion' : ''} ${controlsOpen ? 'controls-open' : ''} ${(selectedTooth && chapter < 2) || (instrument !== null && chapter === 3) ? 'has-inspection' : ''}`}>
       <div className="atmosphere" aria-hidden="true" />
       <Suspense fallback={null}><Scene state={sceneState} callbacks={{ ready: () => setReady(true), error: setError, selectTooth: setSelectedTooth, selectInstrument: setInstrument, hover: setHover, faceStatus: setFaceStatus, anatomyStatus: setAnatomyStatus }} /></Suspense>
       <div className="scene-vignette" aria-hidden="true" />
-      <div className="frost-transition" ref={frost} aria-hidden="true" />
       <div className="grain" aria-hidden="true" />
       <header className="header">
         <button className="brand" onClick={() => go(0)} aria-label="Dental, return to introduction"><span className="brand-word">dental<span className="brand-mark">✳</span></span><span className="brand-caption mono">ANATOMY IN MOTION</span></button>
@@ -114,6 +113,8 @@ export default function App() {
           <h1>{active.name.split('\n').map((line, i) => <span key={line}>{line}{i === 0 && <br />}</span>)}</h1>
           <p className="intro-description">{active.description.split('\n').map(line => <span key={line}>{line}<br /></span>)}</p>
           {chapter === 0 && <button className="explore-cta" onClick={() => go(1)}><span>Begin exploration</span><span className="cta-circle"><Icon name="arrow" size={19} /></span></button>}
+          <div className="chapter-adjustments" id="chapter-adjustments">
+          <div className="compact-panel-heading mono"><span>EXPLORE THE DETAILS</span><button className="icon-button" aria-label="Close model controls" onClick={() => setControlsOpen(false)}><Icon name="close" size={14} /></button></div>
           {chapter === 1 && <div className="detail-controls" id="jaw-controls">
             <label className="range-label mono" htmlFor="jaw-opening"><span>JAW OPENING</span><span>{Math.round(jawOpen * 100)}%</span></label>
             <input id="jaw-opening" type="range" min="0" max="1" step="0.01" value={jawOpen} onChange={e => setJawOpen(Number(e.target.value))} aria-label="Jaw opening" />
@@ -124,6 +125,7 @@ export default function App() {
           {chapter === 3 && <div className="instrument-list" aria-label="Choose an instrument">{instruments.map((item, i) => <button key={item.name} className={instrument === i ? 'active' : ''} onClick={() => setInstrument(instrument === i ? null : i)} aria-pressed={instrument === i}><span className="mono">{item.index}</span><span>{item.name}</span><Icon name={instrument === i ? 'minus' : 'diagonal'} size={16} /></button>)}</div>}
         </div>
 
+        </div>
         <div className="specimen-caption mono" aria-hidden="true"><span className="caption-line" /><span>SPECIMEN / 0{chapter === 0 ? 1 : chapter}</span><strong>{active.specimen}</strong></div>
         <div className="annotation annotation-top mono" aria-hidden="true"><span className="annotation-plus">+</span><span>{chapter < 2 ? 'ENAMEL' : chapter === 2 ? 'SURFACE' : 'STAINLESS STEEL'}<small>{chapter < 2 ? 'NATURALLY EXTRAORDINARY' : chapter === 2 ? 'THE VISIBLE & THE INVISIBLE' : 'FORM FOLLOWS FUNCTION'}</small></span><i /></div>
         <div className="annotation annotation-side mono" aria-hidden="true"><i /><span className="annotation-plus">+</span><span>{chapter < 2 ? (teeth ? '32' : '02') : chapter === 2 ? '04' : '03'}<small>{chapter < 2 ? (teeth ? 'INDIVIDUAL TEETH' : 'BONY ARCHES') : chapter === 2 ? 'CONNECTED LAYERS' : 'PURPOSEFUL FORMS'}</small></span></div>
@@ -135,6 +137,7 @@ export default function App() {
         {chapter === 2 && faceStatus !== 'ready' && anatomyStatus === 'ready' && !error && <div className="scene-message" role="status"><p>{faceStatus === 'loading' ? 'Loading the facial study…' : 'The face model could not load. Reload to try again.'}</p>{faceStatus === 'error' && <button onClick={() => window.location.reload()} className="text-button">Reload model <Icon name="reset" size={15} /></button>}</div>}
 
         <div className="object-controls" id="experience-controls" tabIndex={-1}>
+          {chapter > 0 && <button className="compact-controls-toggle" aria-label="Adjust model" aria-expanded={controlsOpen} aria-controls="chapter-adjustments" onClick={() => { setSelectedTooth(null); setInstrument(null); setControlsOpen(v => !v); }}><Icon name={controlsOpen ? 'close' : 'layers'} size={17} /></button>}
           <div className="drag-hint mono"><Icon name="rotate" size={16} /><span>{hover || 'DRAG TO ROTATE · SCROLL TO EXPLORE'}</span></div>
           {chapter < 2 ? <div className="view-switch" role="group" aria-label="Anatomy view"><button className={view === 'dentition' ? 'active' : ''} onClick={() => setView('dentition')} aria-pressed={view === 'dentition'}><span className="view-dot" />Dentition</button><button className={view === 'bone' ? 'active' : ''} onClick={() => setView('bone')} aria-pressed={view === 'bone'}><Icon name="layers" size={14} />Bone</button><button className={view === 'exploded' ? 'active' : ''} onClick={() => setView('exploded')} aria-pressed={view === 'exploded'}><Icon name="plus" size={14} />Exploded</button></div> : chapter === 2 ? <div className="spread-control"><label className="mono" htmlFor="layer-spread">SEPARATE LAYERS</label><input id="layer-spread" type="range" min="0" max="1" step="0.01" value={spread} onChange={e => setSpread(Number(e.target.value))} /></div> : <button className="collection-button" onClick={() => setInstrument(null)}><Icon name="layers" size={15} />View the collection<Icon name="arrow" size={16} /></button>}
         </div>
@@ -142,6 +145,7 @@ export default function App() {
 
         {selectedTooth && chapter < 2 && <aside className="inspection-card" aria-live="polite"><div className="inspection-top mono"><span>TOOTH / {selectedTooth.id}</span><button className="icon-button" aria-label="Close tooth details" onClick={() => setSelectedTooth(null)}><Icon name="close" size={15} /></button></div><h2>{selectedTooth.name}</h2><span className="mono subline">{selectedTooth.arch} {selectedTooth.side.toLowerCase()} · FDI notation</span><p>{selectedTooth.description}</p></aside>}
         {instrument !== null && chapter === 3 && <aside className="inspection-card" aria-live="polite"><div className="inspection-top mono"><span>INSTRUMENT / {instruments[instrument].index}</span><button className="icon-button" aria-label="Close instrument details" onClick={() => setInstrument(null)}><Icon name="close" size={15} /></button></div><h2>{instruments[instrument].detail}</h2><p>{instruments[instrument].description}</p></aside>}
+        <div className="compact-specimen mono">{active.specimen}<span>DRAG TO ROTATE</span></div>
         <div className="chapter-indicator mono"><span className="status-dot" />A CLOSER LOOK<span className="chapter-number">0{chapter + 1}<span>/ 04</span></span></div>
       </main>
       <footer className="footer">
@@ -149,7 +153,7 @@ export default function App() {
         <button className={`sound-button mono ${sound.enabled ? 'enabled' : ''}`} onClick={() => void sound.toggle()} aria-pressed={sound.enabled} aria-label={sound.enabled ? 'Turn sound off' : 'Turn sound on'}><span className="equalizer" aria-hidden="true"><i /><i /><i /><i /><i /></span>SOUND {sound.enabled ? 'ON' : 'OFF'}</button>
         <nav className="chapter-nav" aria-label="Experience chapters">{chapters.map((item, i) => <button className={chapter === i ? 'active' : ''} onClick={() => go(i)} aria-label={`Chapter ${i + 1}: ${item.label}`} aria-current={chapter === i ? 'step' : undefined} key={item.label}><span className="mono">0{i + 1}</span><i /></button>)}</nav>
         <button className="scroll-prompt mono" onClick={() => go(chapter === 3 ? 0 : chapter + 1)}>{chapter === 3 ? 'BACK TO THE BEGINNING' : 'SCROLL TO DISCOVER'}<Icon name={chapter === 3 ? 'reset' : 'down'} size={14} /></button>
-        <div className="footer-right"><button className="motion-button mono" onClick={() => { if (reducedMotion) { setReducedMotion(false); setPaused(false); } else setPaused(v => !v); }} aria-pressed={!paused && !reducedMotion}><Icon name={paused || reducedMotion ? 'play' : 'pause'} size={13} /><span>MOTION {paused || reducedMotion ? 'OFF' : 'ON'}</span></button><button className="settings-button" onClick={() => setDialog('settings')} aria-label="Experience settings"><span /><span /><span /></button></div>
+        <div className="footer-right"><button className="motion-button mono" aria-label={`MOTION ${paused || reducedMotion ? 'OFF' : 'ON'}`} onClick={() => { if (reducedMotion) { setReducedMotion(false); setPaused(false); } else setPaused(v => !v); }} aria-pressed={!paused && !reducedMotion}><Icon name={paused || reducedMotion ? 'play' : 'pause'} size={13} /><span>MOTION {paused || reducedMotion ? 'OFF' : 'ON'}</span></button><button className="settings-button" onClick={() => setDialog('settings')} aria-label="Experience settings"><span /><span /><span /></button></div>
       </footer>
       <div className="sr-only" role="status">{sound.error}</div>
     </div>
